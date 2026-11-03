@@ -22,6 +22,10 @@
 #include "plugin.h"
 #include "mpegplayer.h"
 
+#if LCD_DEPTH >= 24
+#include <stdlib.h>
+#endif
+
 #define VO_NON_NULL_RECT 0x1
 #define VO_VISIBLE       0x2
 
@@ -123,13 +127,89 @@ static void vo_draw_black(struct vo_rect *rc)
     video_unlock();
 }
 
+#if LCD_DEPTH >= 24
+/* The core's generic lcd_blit_yuv() is written for 16bpp displays: it packs
+ * 6-bit values with FB_RGBPACK(), so on a 24/32bpp target (the HiBy-OS Linux
+ * ports use XRGB8888) every pixel comes out almost black.  Convert the frame
+ * ourselves into the real pixel format and hand it to lcd_bitmap().  Only
+ * used on landscape LCDs - portrait ones take the lcd_blit_yuv() path. */
+static fb_data *yuv_bmp;
+static size_t yuv_bmp_px;
+
+static void yuv_blit_hicolor(uint8_t * const * buf, int src_x, int src_y,
+                             int stride, int x, int y, int width, int height)
+{
+    size_t need = (size_t)width * height;
+    if (need > yuv_bmp_px)
+    {
+        free(yuv_bmp);
+        yuv_bmp = malloc(need * sizeof(fb_data));
+        yuv_bmp_px = yuv_bmp ? need : 0;
+        if (yuv_bmp == NULL)
+            return;
+    }
+
+    const uint8_t *ys = buf[0] + src_y * stride + src_x;
+    const uint8_t *us = buf[1] + ((src_y * stride) >> 2) + (src_x >> 1);
+    const uint8_t *vs = buf[2] + ((src_y * stride) >> 2) + (src_x >> 1);
+    fb_data *dst = yuv_bmp;
+
+    for (int j = 0; j < height; j++)
+    {
+        const uint8_t *yrow = ys + j * stride;
+        const uint8_t *urow = us + (j >> 1) * (stride >> 1);
+        const uint8_t *vrow = vs + (j >> 1) * (stride >> 1);
+        for (int i = 0; i < width; i++)
+        {
+            int yy = 74 * (yrow[i] - 16);
+            int cb = urow[i >> 1] - 128;
+            int cr = vrow[i >> 1] - 128;
+            int r = yy + 101 * cr;
+            int g = yy - 24 * cb - 51 * cr;
+            int b = yy + 128 * cb;
+
+            if (r < 0) r = 0; else if (r > 16383) r = 16383;
+            if (g < 0) g = 0; else if (g > 16383) g = 16383;
+            if (b < 0) b = 0; else if (b > 16383) b = 16383;
+
+            dst->r = r >> 6;
+            dst->g = g >> 6;
+            dst->b = b >> 6;
+            dst->x = 0;
+            dst++;
+        }
+    }
+
+    rb->lcd_bitmap(yuv_bmp, x, y, width, height);
+    rb->lcd_update_rect(x, y, width, height);
+}
+#endif /* LCD_DEPTH >= 24 */
+
 static inline void yuv_blit(uint8_t * const * buf, int src_x, int src_y,
                             int stride, int x, int y, int width, int height)
 {
     video_lock();
 
-#ifdef HAVE_LCD_COLOR
+#if LCD_DEPTH >= 24
+    yuv_blit_hicolor(buf, src_x, src_y, stride, x, y, width, height);
+#elif defined(HAVE_LCD_COLOR)
     rb->lcd_blit_yuv(buf, src_x, src_y, stride, x, y , width, height);
+    /* Some targets (e.g. the Ingenic X1000 ones) only implement the generic
+     * lcd_blit_yuv() from lcd-color-common.c, which writes the converted
+     * frame into the framebuffer but never pushes it to the panel.  On those
+     * the video would stay invisible until some unrelated UI redraw flushes
+     * the screen (looks like "nothing until you press pause").  Push the
+     * freshly drawn rectangle explicitly.  Define
+     * MPEGPLAYER_BLIT_UPDATE for targets whose lcd_blit_yuv already
+     * transfers the data itself. */
+#ifdef MPEGPLAYER_BLIT_UPDATE
+#if LCD_WIDTH < LCD_HEIGHT
+    /* Portrait LCDs draw the frame rotated by 90 degrees */
+    rb->lcd_update_rect(LCD_WIDTH - y - height, x, height, width);
+#else
+    rb->lcd_update_rect(x, y, width, height);
+#endif
+#endif
 #else
     grey_ub_gray_bitmap_part(buf[0], src_x, src_y, stride, x, y, width, height);
 #endif
@@ -526,6 +606,11 @@ bool vo_is_visible(void)
 void vo_cleanup(void)
 {
     vo.flags = 0;
+#if LCD_DEPTH >= 24 && defined(HAVE_LCD_COLOR)
+    free(yuv_bmp);
+    yuv_bmp = NULL;
+    yuv_bmp_px = 0;
+#endif
 }
 
 void vo_set_clip_rect(const struct vo_rect *rc)
