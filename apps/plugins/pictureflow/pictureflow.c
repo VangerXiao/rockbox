@@ -81,12 +81,23 @@ static fb_data *lcd_fb;
 const struct button_mapping pf_context_album_scroll[] =
 {
 #ifdef HAVE_TOUCHSCREEN
+    /* HiBy R1: the 3x3 touch grid makes covers flip on the slightest touch,
+     * so scrolling is done with the volume keys instead (see below) and the
+     * touch zones are left to the buttons context (tap = select, corner =
+     * back). */
+#if CONFIG_KEYPAD != HIBY_R3PROII_PAD
     {PF_PREV,         BUTTON_MIDLEFT,                 BUTTON_NONE},
     {PF_PREV_REPEAT,  BUTTON_MIDLEFT|BUTTON_REPEAT,   BUTTON_NONE},
     {PF_NEXT,         BUTTON_MIDRIGHT,                BUTTON_NONE},
     {PF_NEXT_REPEAT,  BUTTON_MIDRIGHT|BUTTON_REPEAT,  BUTTON_NONE},
 #endif
-#if (CONFIG_KEYPAD == IAUDIO_M3_PAD || CONFIG_KEYPAD == MROBE500_PAD)
+#endif
+#if CONFIG_KEYPAD == HIBY_R3PROII_PAD
+    {PF_PREV,         BUTTON_VOL_UP,                  BUTTON_NONE},
+    {PF_PREV_REPEAT,  BUTTON_VOL_UP|BUTTON_REPEAT,    BUTTON_NONE},
+    {PF_NEXT,         BUTTON_VOL_DOWN,                BUTTON_NONE},
+    {PF_NEXT_REPEAT,  BUTTON_VOL_DOWN|BUTTON_REPEAT,  BUTTON_NONE},
+#elif (CONFIG_KEYPAD == IAUDIO_M3_PAD || CONFIG_KEYPAD == MROBE500_PAD)
     {PF_PREV,         BUTTON_RC_REW,              BUTTON_NONE},
     {PF_PREV_REPEAT,  BUTTON_RC_REW|BUTTON_REPEAT,BUTTON_NONE},
     {PF_NEXT,         BUTTON_RC_FF,               BUTTON_NONE},
@@ -279,7 +290,7 @@ typedef fb_data pix_t;
 #define ERROR_USER_ABORT    -4
 
 /* current version for cover cache */
-#define CACHE_VERSION 4
+#define CACHE_VERSION 5
 #define CONFIG_VERSION 1
 #define CONFIG_FILE "pictureflow.cfg"
 #define INDEX_HDR "PFID"
@@ -876,7 +887,12 @@ static inline PFreal fcos(int iangle)
 static inline unsigned scale_subpixel_lcd(unsigned val, unsigned bits)
 {
     (void) bits;
-#if LCD_PIXELFORMAT != RGB888
+    /* Only reduce the precision when the LCD really has fewer than 8 bits per
+     * channel.  Testing "LCD_PIXELFORMAT != RGB888" was wrong for XRGB8888
+     * (32bpp) targets such as the HiBy-OS ports: those got 5/6/5-quantised
+     * values handed to FB_RGBPACK_LCD(), which expects full 8-bit components,
+     * so every cover came out dark and green. */
+#if LCD_DEPTH < 24
     val = val * ((1 << bits) - 1);
     val = ((val >> 8) + val + 128) >> 8;
 #endif
@@ -2642,6 +2658,17 @@ static int read_pfraw(char* filename, int prio)
     }
     else
         rb->read(fh, &bmph, sizeof(struct pfraw_header));
+
+    /* Sanity-check the cached slide.  A cache written by a build with a
+     * different bytes-per-pixel (or a truncated file) used to be loaded
+     * blindly, which showed up as completely garbled 'green' covers. */
+    if (bmph.width <= 0 || bmph.height <= 0 ||
+        rb->ffilesize(fh) != (off_t)(sizeof(struct pfraw_header) +
+            (off_t)bmph.width * bmph.height * (off_t)sizeof(pix_t)))
+    {
+        rb->close(fh);
+        return empty_slide_hid;
+    }
 
     int size =  sizeof(struct dim) +
                 sizeof( pix_t ) * bmph.width * bmph.height;
