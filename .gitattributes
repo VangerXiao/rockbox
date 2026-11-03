@@ -14,3 +14,7 @@
 *.vcproj        -text
 *.wav           binary
 *.xcf           binary
+
+# shell scripts must keep LF endings (Windows checkouts with autocrlf would break them)
+*.sh            text eol=lf
+
