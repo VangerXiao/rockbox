@@ -175,6 +175,35 @@ int main(void)
     CHART(">init");
     init();
     CHART("<init");
+
+#ifdef SIMULATOR
+    /* [本地补丁] 无人值守验证 WPS 皮肤：启动即播放 _simplay.txt 里写的文件。 */
+    {
+        FILE *sp = fopen("D:/rockbox/_simplay.txt", "r");
+        fprintf(stderr, "[simplay] hook reached, fopen=%p\n", (void *)sp);
+        if (sp)
+        {
+            char sp_path[256];
+            if (fgets(sp_path, sizeof sp_path, sp))
+            {
+                size_t n = strlen(sp_path);
+                while (n && (sp_path[n-1] == '\n' || sp_path[n-1] == '\r'))
+                    sp_path[--n] = 0;
+                if (n && playlist_create("/", sp_path) >= 0)
+                {
+                    playlist_start(0, 0, 0);
+                    /* start_in_screen=wps 的拦路条件是 resume_index==-1
+                     * （root_menu.c:865），这里给一个有效值以便直接停在 WPS。 */
+                    global_status.resume_index = 0;
+                    fprintf(stderr, "[simplay] playing /%s\n", sp_path);
+                }
+                else
+                    fprintf(stderr, "[simplay] cannot play /%s\n", sp_path);
+            }
+            fclose(sp);
+        }
+    }
+#endif
     FOR_NB_SCREENS(i)
     {
         screens[i].clear_display();
@@ -805,6 +834,7 @@ static void init(void)
     CHART("<settings_apply_skins");
     settings_apply_skins();
     CHART(">settings_apply_skins");
+
 }
 
 #ifdef CPU_PP

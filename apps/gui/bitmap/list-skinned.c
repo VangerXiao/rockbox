@@ -249,8 +249,18 @@ bool skinlist_draw(struct screen *display, struct gui_synclist *list)
                 current_column = 1;
                 current_row = cur_line;
                 skin_viewport->vp.x = parent->x + original_x;
+                /* [本地补丁] 加上像素级滚动偏移，实现平滑滚动。
+                 * 原生渲染器用 (start_item*height - y_pos) 算 draw_offset
+                 * （bitmap/list.c:250），而这里原先只用整行位置，
+                 * 所以皮肤化列表只能整行跳。y_pos 由 do_touch_scroll()
+                 * 维护（bitmap/list.c:475），取它对行高取余即为小数部分。 */
+                int pix_off = 0;
+#ifdef HAVE_TOUCHSCREEN
+                if (list->y_pos > 0 && listcfg[screen]->height > 0)
+                    pix_off = list->y_pos % listcfg[screen]->height;
+#endif
                 skin_viewport->vp.y = parent->y + original_y +
-                                   (listcfg[screen]->height*cur_line);
+                                   (listcfg[screen]->height*cur_line) - pix_off;
             }
             display->set_viewport(&skin_viewport->vp);
             /* Set images to not to be displayed */

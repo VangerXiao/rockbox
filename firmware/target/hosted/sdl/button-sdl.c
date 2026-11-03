@@ -373,17 +373,171 @@ int sdl_event_filter(void *userdata, SDL_Event * event)
 }
 #endif
 
+/* [本地补丁] 无人值守点击注入。
+ * 从 D:/rockbox/_simkeys.txt 读若干 "x y" 行，按时间表注入左键按下/抬起，
+ * 用来自动驱动 UI（例如进入播放界面去验证 WPS）。SDL 鼠标坐标在模拟器里
+ * 注意要写**窗口坐标**：touchscreen_event() 里会做 x -= UI_LCD_POSX，
+ * 所以窗口坐标 = LCD 坐标 + (UI_LCD_POSX, UI_LCD_POSY)。 */
+int sim_click_step = -1;
+static int sim_click_delay_ms = 2500;   /* [本地补丁] 首次点击延迟，可由 _simkeys.txt 的 delay 行覆盖 */   /* [本地补丁] 当前注入到第几次点击，供截图钩子命名 */
+
+static void inject_scheduled_clicks(void)
+{
+    static int loaded = 0, idx = 0, down = 0, kn = 0;
+    static int kx[64], ky[64];
+    static Uint32 next_ms = 0, up_ms = 0;
+    SDL_Event e;
+
+    if (!loaded)
+    {
+        FILE *f = fopen("D:/rockbox/_simkeys.txt", "r");
+        loaded = 1;
+        if (f)
+        {
+            /* [本地补丁] 首行可写 "delay 12000"，用来推迟首次点击。
+             * 模拟器从启动到进入 WPS 要约 10 秒，默认 2500ms 太早。 */
+            {
+                long d = 2500;
+                char tok[32];
+                long pos = ftell(f);
+                if (fscanf(f, "%31s", tok) == 1 && strcmp(tok, "delay") == 0)
+                {
+                    if (fscanf(f, "%ld", &d) != 1)
+                        d = 2500;
+                }
+                else
+                    fseek(f, pos, SEEK_SET);
+                sim_click_delay_ms = (int)d;
+            }
+            while (kn < 64 && fscanf(f, "%d %d", &kx[kn], &ky[kn]) == 2)
+                kn++;
+            fclose(f);
+            fprintf(stderr, "[simkeys] %d clicks loaded, delay=%dms\n",
+                    kn, sim_click_delay_ms);
+        }
+        next_ms = SDL_GetTicks() + sim_click_delay_ms;
+    }
+    if (kn == 0 || idx >= kn)
+        return;
+
+    if (!down && SDL_GetTicks() >= next_ms)
+    {
+        SDL_zero(e);
+        e.type = SDL_MOUSEBUTTONDOWN;
+        e.button.type = SDL_MOUSEBUTTONDOWN;
+        e.button.button = SDL_BUTTON_LEFT;
+        e.button.state = SDL_PRESSED;
+        e.button.clicks = 1;
+        e.button.x = kx[idx] + UI_LCD_POSX; e.button.y = ky[idx] + UI_LCD_POSY;
+        SDL_PushEvent(&e);
+        fprintf(stderr, "[simkeys] click %d at LCD %d,%d\n", idx, kx[idx], ky[idx]);
+        sim_click_step = idx;
+        down = 1;
+        up_ms = SDL_GetTicks() + 50;
+    }
+    else if (down && SDL_GetTicks() >= up_ms)
+    {
+        SDL_zero(e);
+        e.type = SDL_MOUSEBUTTONUP;
+        e.button.type = SDL_MOUSEBUTTONUP;
+        e.button.button = SDL_BUTTON_LEFT;
+        e.button.state = SDL_RELEASED;
+        e.button.x = kx[idx] + UI_LCD_POSX; e.button.y = ky[idx] + UI_LCD_POSY;
+        SDL_PushEvent(&e);
+        down = 0;
+        idx++;
+        next_ms = SDL_GetTicks() + 1200;
+    }
+}
+
+
+/* [本地补丁] 滑动注入：从 D:/rockbox/_simdrag.txt 读 "x1 y1 x2 y2 steps delay_ms"，
+ * 依次注入 按下 -> 若干次移动 -> 抬起，用来验证列表滚动行为。 */
+static void inject_drag(void)
+{
+    static int state = 0;
+    static int x1, y1, x2, y2, steps, cur;
+    static Uint32 t_start = 0, t_step = 0;
+    SDL_Event e;
+
+    if (state == 0)
+    {
+        FILE *f = fopen("D:/rockbox/_simdrag.txt", "r");
+        int delay = 12000;
+        state = 1;
+        if (!f)
+            return;
+        if (fscanf(f, "%d %d %d %d %d %d", &x1, &y1, &x2, &y2, &steps, &delay) != 6)
+        {
+            fclose(f);
+            return;
+        }
+        fclose(f);
+        if (steps <= 0) steps = 10;
+        cur = 0;
+        t_start = SDL_GetTicks() + (Uint32)delay;
+        fprintf(stderr, "[simdrag] %d,%d -> %d,%d  %d steps, delay %dms\n",
+                x1, y1, x2, y2, steps, delay);
+        return;
+    }
+    if (state == 1 && SDL_GetTicks() >= t_start)
+    {
+        SDL_zero(e);
+        e.type = SDL_MOUSEBUTTONDOWN;
+        e.button.type = SDL_MOUSEBUTTONDOWN;
+        e.button.button = SDL_BUTTON_LEFT;
+        e.button.state = SDL_PRESSED;
+        e.button.x = x1 + UI_LCD_POSX; e.button.y = y1 + UI_LCD_POSY;
+        SDL_PushEvent(&e);
+        fprintf(stderr, "[simdrag] press at LCD %d,%d\n", x1, y1);
+        state = 2; t_step = SDL_GetTicks() + 30;
+        return;
+    }
+    if (state == 2 && SDL_GetTicks() >= t_step)
+    {
+        cur++;
+        int px = x1 + (x2 - x1) * cur / steps;
+        int py = y1 + (y2 - y1) * cur / steps;
+        SDL_zero(e);
+        e.type = SDL_MOUSEMOTION;
+        e.motion.type = SDL_MOUSEMOTION;
+        e.motion.state = SDL_BUTTON_LMASK;
+        e.motion.x = px + UI_LCD_POSX; e.motion.y = py + UI_LCD_POSY;
+        SDL_PushEvent(&e);
+        t_step = SDL_GetTicks() + 30;
+        if (cur >= steps)
+        {
+            fprintf(stderr, "[simdrag] release at LCD %d,%d\n", px, py);
+            state = 3; t_step = SDL_GetTicks() + 120;
+        }
+        return;
+    }
+    if (state == 3 && SDL_GetTicks() >= t_step)
+    {
+        SDL_zero(e);
+        e.type = SDL_MOUSEBUTTONUP;
+        e.button.type = SDL_MOUSEBUTTONUP;
+        e.button.button = SDL_BUTTON_LEFT;
+        e.button.state = SDL_RELEASED;
+        e.button.x = x2 + UI_LCD_POSX; e.button.y = y2 + UI_LCD_POSY;
+        SDL_PushEvent(&e);
+        fprintf(stderr, "[simdrag] done\n");
+        state = 4;
+    }
+}
+
 void gui_message_loop(void)
 {
     SDL_Event event;
     bool quit;
 
     do {
-        /* wait for the next event */
-        if(SDL_WaitEvent(&event) == 0) {
-            printf("SDL_WaitEvent(): %s\n", SDL_GetError());
-            return; /* error, out of here */
-        }
+        /* [本地补丁] 用带超时的等待，好让注入的时间表有机会推进 */
+        inject_scheduled_clicks();
+        inject_drag();
+        /* 超时(返回 0)不是错误，继续循环即可 —— 否则第一轮超时就退出了。 */
+        if (SDL_WaitEventTimeout(&event, 100) == 0)
+            continue;
 
         sim_enter_irq_handler();
         quit = event_handler(&event);

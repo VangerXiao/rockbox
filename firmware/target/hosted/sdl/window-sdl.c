@@ -149,6 +149,32 @@ static void rebuild_gui_texture(void)
 
 void sdl_window_render(void)
 {
+    /* [本地补丁] 无人值守截图：每 60 次呈现把 LCD 帧缓冲存成 BMP。
+     * 远程桌面下抓屏不可用，这里直接导出像素精确的帧，便于主题自查。 */
+    if (sim_lcd_surface)
+    {
+        extern int sim_click_step;   /* [本地补丁] 见 button-sdl.c */
+        SDL_SaveBMP(sim_lcd_surface, "D:/rockbox/_simshot.bmp");
+        /* [本地补丁] 时间轴截图：每 500ms 存一帧，用来观察"出现->消失"这类过程。
+         * 配合 _simkeys.txt 的点击注入，就能无人值守地复现并查看交互效果。 */
+        {
+            static int last_bucket = -1;
+            int bucket = (int)(SDL_GetTicks() / 500);
+            if (bucket != last_bucket)
+            {
+                char tp[64];
+                last_bucket = bucket;
+                snprintf(tp, sizeof tp, "D:/rockbox/_t_%05d.bmp", bucket);
+                SDL_SaveBMP(sim_lcd_surface, tp);
+            }
+        }
+        if (sim_click_step >= 0)
+        {
+            char p[64];
+            snprintf(p, sizeof p, "D:/rockbox/_step_%d.bmp", sim_click_step);
+            SDL_SaveBMP(sim_lcd_surface, p);
+        }
+    }
     if (new_gui_texture_needed)
     {
         new_gui_texture_needed = false;

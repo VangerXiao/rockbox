@@ -160,6 +160,9 @@ findtool(){
 
 # scan the $PATH for ${sdl_config} - check whether for a (cross-)win32
 # sdl as requested
+# [本地补丁] busybox sh 在 Windows 上把 PATH 规整成 ';' 分隔，
+# 而下面用 IFS=":" 遍历 PATH，会把整条 PATH 当成一个目录。
+# 这里把分隔符放宽为 ':' 和 ';' 两者都认。
 findsdl(){
   files=${sdl_config}
   if [ -n "$CROSS_COMPILE" ]; then
@@ -176,7 +179,7 @@ findsdl(){
     if [ $? -eq 0 ];
     then
       subdirs="bin:mingw/bin:sbin:mingw/sbin"
-      IFS=":"
+      IFS=":;"
       for subdir in $subdirs
       do
         if [ -e "${sysroot}/${subdir}" ]; then
@@ -191,7 +194,7 @@ findsdl(){
   fi
 
   # search for the correct ${sdl_config}
-  IFS=":"
+  IFS=":;"
   for path in $paths2check
   do
     for file in $files
@@ -356,6 +359,15 @@ simcc () {
    # disable it explicitly for the time being (it doesn't appear to be required for us)
    GCCOPTS="$GCCOPTS -mmmx -mno-ms-bitfields"
  else
+  # [本地补丁] w64devkit/busybox 的 uname 内建在 Windows 上返回 "Windows_NT"，
+  # 而 configure 需要 MinGW 三元组才会走 MINGW* 分支。这里做映射。
+  # 只影响宿主检测，不改变任何目标构建逻辑。
+  [ "$uname" = "Windows_NT" ] && uname=MINGW64_NT-10.0
+  # [本地补丁] MSYS2 的 bash 里 uname 返回 "MSYS_NT-10.0-26200" 之类，
+  # 而 configure 只认 MINGW64_NT-*，这里统一映射过去，同样只影响宿主检测。
+  case $uname in
+    MSYS_NT-*) uname=MINGW64_NT-10.0 ;;
+  esac
  case $uname in
    CYGWIN*)
    echo "Cygwin host detected"
