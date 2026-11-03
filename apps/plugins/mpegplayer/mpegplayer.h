@@ -36,6 +36,10 @@
 
 /** Video thread **/
 #define LIBMPEG2_ALLOC_SIZE (2*1024*1024)
+/* On hosted (Linux) ports the video pool can come straight from the C heap
+ * instead of the small buflib block the core hands out.  That is what makes
+ * resolutions beyond ~480x360 possible at all. */
+#define MPEG_LIBMPEG2_POOL_SIZE (4*1024*1024)
 
 /** MPEG audio buffer **/
 #define AUDIOBUF_GUARD_SIZE (MPA_MAX_FRAME_SIZE + 2*MAD_BUFFER_GUARD)

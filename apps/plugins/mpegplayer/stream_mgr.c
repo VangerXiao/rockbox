@@ -1157,6 +1157,9 @@ void stream_exit(void)
         stream_mgr.thread = 0;
     }
 
+    /* Give back any memory obtained outside the core buffer */
+    mpeg_alloc_uninit();
+
 #ifndef HAVE_LCD_COLOR
     grey_release();
 #endif

@@ -28,6 +28,15 @@
 #include "mpegplayer.h"
 #include <system.h>
 
+/* Hosted (Linux) ports run as a normal process and can take the video pool
+ * from the C library heap.  The buflib block the core gives us is only a few
+ * MB and has to hold the demux buffer as well, which is what limited us to
+ * ~480x360.  Everything else stays on the core allocator. */
+#if (CONFIG_PLATFORM & PLATFORM_HOSTED)
+#include <stdlib.h>
+#define MPEG2_POOL_FROM_MALLOC
+#endif
+
 /* Main allocator */
 static off_t mem_ptr;
 static size_t bufsize;
@@ -38,6 +47,9 @@ static off_t mpeg2_mem_ptr SHAREDBSS_ATTR;
 static size_t mpeg2_bufsize SHAREDBSS_ATTR;
 static unsigned char *mpeg2_mallocbuf SHAREDBSS_ATTR;
 static unsigned char *mpeg2_bufallocbuf SHAREDBSS_ATTR;
+#ifdef MPEG2_POOL_FROM_MALLOC
+static unsigned char *mpeg2_pool_heap;   /* non-NULL if pool came from malloc */
+#endif
 
 #if defined(DEBUG) || defined(SIMULATOR)
 const char * mpeg_get_reason_str(int reason)
@@ -137,6 +149,35 @@ bool mpeg_alloc_init(unsigned char *buf, size_t mallocsize)
 
     /* Separate allocator for video */
     mpeg2_mem_ptr = 0;
+#ifdef MPEG2_POOL_FROM_MALLOC
+    mpeg2_pool_heap = NULL;
+    {
+        /* Ask for a bigger pool than the core could ever give us.  Shrink the
+         * request until the heap accepts it; fall back to the classic scheme
+         * if nothing works. */
+        size_t want = MPEG_LIBMPEG2_POOL_SIZE;
+        while (want >= LIBMPEG2_ALLOC_SIZE)
+        {
+            /* Over-allocate a bit so the pool itself stays cache-aligned even
+             * if the C library hands back only 8-byte aligned memory. */
+            unsigned char *raw = malloc(want + 64);
+            if (raw != NULL)
+            {
+                unsigned char *p = raw;
+                size_t sz = want + 64;
+                ALIGN_BUFFER(p, sz, 64);
+                mpeg2_pool_heap = raw;      /* remember the real base for free() */
+                mpeg2_mallocbuf = p;
+                mpeg2_bufallocbuf = p;
+                mpeg2_bufsize = sz;
+                /* Whole buflib block is left for the demux buffer */
+                IF_COP(rb->commit_discard_dcache());
+                return true;
+            }
+            want >>= 1;
+        }
+    }
+#endif
     mpeg2_mallocbuf = mallocbuf;
     mpeg2_bufallocbuf = mallocbuf;
     mpeg2_bufsize = CACHEALIGN_UP(LIBMPEG2_ALLOC_SIZE);
@@ -151,6 +192,23 @@ bool mpeg_alloc_init(unsigned char *buf, size_t mallocsize)
     IF_COP(rb->commit_discard_dcache());
     return true;
 }
+
+/* Free whatever mpeg_alloc_init() took from outside the core buffer */
+void mpeg_alloc_uninit(void)
+{
+#ifdef MPEG2_POOL_FROM_MALLOC
+    if (mpeg2_pool_heap != NULL)
+    {
+        free(mpeg2_pool_heap);
+        mpeg2_pool_heap = NULL;
+        mpeg2_mallocbuf = NULL;
+        mpeg2_bufallocbuf = NULL;
+        mpeg2_bufsize = 0;
+        mpeg2_mem_ptr = 0;
+    }
+#endif
+}
+
 
 /* allocate non-dedicated buffer space which mpeg2_mem_reset will free */
 void * mpeg2_malloc(unsigned size, mpeg2_alloc_t reason)

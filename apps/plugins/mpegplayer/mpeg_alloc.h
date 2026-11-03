@@ -27,5 +27,7 @@ void *mpeg_malloc(size_t size, mpeg2_alloc_t reason);
 void *mpeg_malloc_all(size_t *size_out, mpeg2_alloc_t reason);
 /* Initializes the malloc buffer with the given base buffer */
 bool mpeg_alloc_init(unsigned char *buf, size_t mallocsize);
+/* Releases any memory obtained outside the core buffer (hosted only) */
+void mpeg_alloc_uninit(void);
 
 #endif /* MPEG_ALLOC_H */
