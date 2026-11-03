@@ -11,12 +11,11 @@
 
 ## 1. 公开仓库（固件）
 
-先在 GitHub 上点 **Fork**（`Rockbox/rockbox` → 你自己的账号），然后：
+已 Fork 到 `VangerXiao/rockbox`（public，parent = `Rockbox/rockbox`），远端已配置为 `myfork`。以后只需：
 
 ```bash
 cd D:\rockbox\_rbsrc
-git remote add myfork https://github.com/<你的用户名>/rockbox.git
-git push -u myfork diy/r1-erosq
+git push myfork diy/r1-erosq
 ```
 
 > **注意**：当前是 `--filter=blob:none` 的浅克隆。推送前必须先解除浅克隆：
@@ -35,12 +34,11 @@ git merge origin/master        # 或 git rebase origin/master
 
 ## 2. 私有仓库（主题 / CJK）
 
-在 GitHub 新建一个 **Private** 空仓库（不要勾选 README），然后：
+已创建私有仓库 `VangerXiao/rockbox-diy-themes`，远端已配置为 `private`。以后只需：
 
 ```bash
 cd D:\rockbox
-git remote add private https://github.com/<你的用户名>/rockbox-diy-themes.git
-git push -u private master
+git push private master
 ```
 
 仓库内容：`*.py` 构建脚本、`*.md` 说明、`fonts_src/`（TTF 源）、`icon_src/`、`ref/`。
