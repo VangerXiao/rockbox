@@ -22,6 +22,7 @@
 #include <signal.h>
 #include <string.h>
 #include <ucontext.h>
+#include <sys/reboot.h>
 #include <backtrace.h>
 
 #include "system.h"
@@ -95,6 +96,17 @@ void power_off(void)
     backlight_hw_off();
     button_close_device();
     sync();
+    /* The hosted port normally leaves the shutdown to init. On the HiBy R1
+     * multi-boot image Rockbox is started from an init script, so init is still
+     * busy in rcS and never acts on the signal /sbin/poweroff sends: the screen
+     * goes dark and the device stays powered until the key is held for ten
+     * seconds. Ask the kernel directly instead -- the same call the stock
+     * firmware's own shutdown ends with -- and keep the old way as a fallback. */
+    if (reboot(RB_POWER_OFF) == 0) {
+        while (1) {
+            usleep(1000);
+        }
+    }
     system("/sbin/poweroff");
     while (1) {
         // Make sure we're not throttling the cpu
